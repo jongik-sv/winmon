@@ -1,0 +1,21 @@
+[package]
+name = "winmon"
+version = "0.1.0"
+edition = "2021"
+description = "Sudoless performance monitor for Windows, inspired by macmon"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.29"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Performance",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

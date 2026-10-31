@@ -1,0 +1,5 @@
+# winmon builds with the GNU toolchain (x86_64-pc-windows-gnu) so that Visual Studio Build Tools
+# are not required. The windows-sys import libraries need `dlltool.exe` from a MinGW-w64 binutils
+# install on PATH — see README.md "빌드".
+[build]
+target = "x86_64-pc-windows-gnu"
