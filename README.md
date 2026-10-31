@@ -83,3 +83,7 @@ Visual Studio Build Tools 없이 빌드하도록 GNU 툴체인(`x86_64-pc-window
 | GPU 클럭 | 표준 카운터에 없어 넣지 않았다 |
 | E코어·LP E코어 | Windows 가 같은 효율 등급으로 보고하면 구분할 수 없어 둘 다 E 로 표시 |
 | 사용률 | `% Processor Utility` 를 쓴다(작업 관리자와 같다). 터보 중 100% 를 넘는 값은 100% 로 자른다 |
+
+## 라이선스
+
+[MIT](LICENSE)
