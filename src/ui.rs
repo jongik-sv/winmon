@@ -1,4 +1,4 @@
-//! Rendering. Per-core graphs on top, power / GPU·NPU / memory / temperatures below.
+//! Rendering. CPU graphs (per core or per core kind) on top, power / GPU·NPU / memory / temperatures below.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -7,7 +7,8 @@ use ratatui::widgets::{Block, Gauge, Paragraph, Sparkline, Wrap};
 use ratatui::Frame;
 use std::ops::Range;
 
-use crate::app::{App, Series};
+use crate::app::{App, CpuView, Series};
+use crate::metrics::CoreSample;
 use crate::topology::CoreKind;
 
 /// Minimum width of one per-core cell in the grid.
@@ -23,7 +24,11 @@ pub fn draw(f: &mut Frame, app: &App) {
     let row1 = rails.len().max(engines.len()) as u16 + 2;
     let row2 = 4;
     // Give the CPU grid priority on short terminals: drop the lower panels before squashing cores.
-    let cpu_min = 3 + app.topo.cpus.len().div_ceil(4) as u16;
+    let cpu_min = match app.view {
+        CpuView::PerCore => 3 + app.topo.cpus.len().div_ceil(4) as u16,
+        // Borders of the panel and of one cell, plus a single graph line.
+        CpuView::ByKind => 5,
+    };
     let (row1, row2) = if area.height >= 1 + cpu_min + row1 + row2 {
         (row1, row2)
     } else if area.height >= 1 + cpu_min + row1 {
@@ -68,7 +73,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     let line = Line::from(vec![
         Span::styled(" winmon ", Style::new().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)),
         Span::raw(format!(" {} · {} · {} ms", topo.cpu_name, mix, app.interval_ms)),
-        Span::styled("   q quit  +/- interval", Style::new().fg(Color::DarkGray)),
+        Span::styled("   q quit  +/- interval  v view", Style::new().fg(Color::DarkGray)),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
@@ -84,10 +89,31 @@ fn draw_cpu(f: &mut Frame, area: Rect, app: &App) {
     if n == 0 || inner.width == 0 || inner.height == 0 {
         return;
     }
+    match app.view {
+        CpuView::PerCore => draw_per_core(f, inner, app),
+        CpuView::ByKind => draw_by_kind(f, inner, app),
+    }
+}
 
+/// One graph per core kind, always side by side (P left, E right).
+fn draw_by_kind(f: &mut Frame, inner: Rect, app: &App) {
+    let rects = grid(inner, 1, app.kinds.len());
+    for (group, rect) in app.kinds.iter().zip(rects) {
+        if inner.height >= 3 {
+            let label = format!("{} ×{}", kind_name(group.kind), group.range.len());
+            draw_cell(f, rect, &GraphCell { label: &label, kind: group.kind, sample: group.last, series: &group.series });
+        } else {
+            let cell = GraphCell { label: group.kind.prefix(), kind: group.kind, sample: group.last, series: &group.series };
+            draw_line(f, rect, &cell);
+        }
+    }
+}
+
+fn draw_per_core(f: &mut Frame, inner: Rect, app: &App) {
+    let n = app.cores.len();
     // Graph cells: each core kind gets its own block of columns (P left, E right).
     let max_cols = (inner.width / MIN_CELL_WIDTH).max(1) as usize;
-    let mut groups = kind_groups(app);
+    let mut groups = app.topo.kind_groups();
     if groups.len() > max_cols {
         groups = vec![0..n];
     }
@@ -107,33 +133,20 @@ fn draw_cpu(f: &mut Frame, area: Rect, app: &App) {
     if inner.height / p.rows as u16 >= 3 {
         let rects = grid(inner, p.rows, p.cols);
         for (i, (r, c)) in p.cells.iter().enumerate() {
-            draw_core_cell(f, rects[r * p.cols + c], app, i);
+            draw_cell(f, rects[r * p.cols + c], &core_cell(app, i));
         }
     } else {
         // Compact mode: one line per core, kinds still side by side.
-        let groups = kind_groups(app);
+        let groups = app.topo.kind_groups();
         let longest = groups.iter().map(|g| g.len()).max().unwrap_or(1);
         let rows = longest.min(inner.height as usize).max(1);
         let group_cols: Vec<usize> = groups.iter().map(|g| g.len().div_ceil(rows)).collect();
         let p = place(&groups, &group_cols);
         let rects = grid(Rect { height: p.rows as u16, ..inner }, p.rows, p.cols);
         for (i, (r, c)) in p.cells.iter().enumerate() {
-            draw_core_line(f, rects[r * p.cols + c], app, i);
+            draw_line(f, rects[r * p.cols + c], &core_cell(app, i));
         }
     }
-}
-
-/// Contiguous runs of cores of the same kind (`topo.cpus` is sorted by kind).
-fn kind_groups(app: &App) -> Vec<Range<usize>> {
-    let cpus = &app.topo.cpus;
-    let mut groups: Vec<Range<usize>> = Vec::new();
-    for (i, cpu) in cpus.iter().enumerate() {
-        match groups.last_mut() {
-            Some(g) if cpus[g.start].kind == cpu.kind => g.end = i + 1,
-            _ => groups.push(i..i + 1),
-        }
-    }
-    groups
 }
 
 /// Grid position of every core: each group fills its own `group_cols` columns row by row,
@@ -165,13 +178,30 @@ fn grid(area: Rect, rows: usize, cols: usize) -> Vec<Rect> {
         .collect()
 }
 
-fn draw_core_cell(f: &mut Frame, area: Rect, app: &App, i: usize) {
+/// One utilisation graph: a single core, or all cores of a kind.
+struct GraphCell<'a> {
+    label: &'a str,
+    kind: CoreKind,
+    sample: CoreSample,
+    series: &'a Series,
+}
+
+fn core_cell(app: &App, i: usize) -> GraphCell<'_> {
     let cpu = &app.topo.cpus[i];
-    let s = app.last.cores.get(i).copied().unwrap_or_default();
-    let color = kind_color(cpu.kind);
+    GraphCell {
+        label: &cpu.label,
+        kind: cpu.kind,
+        sample: app.last.cores.get(i).copied().unwrap_or_default(),
+        series: &app.cores[i],
+    }
+}
+
+fn draw_cell(f: &mut Frame, area: Rect, cell: &GraphCell) {
+    let s = cell.sample;
+    let color = kind_color(cell.kind);
     let block = Block::bordered()
         .border_style(Style::new().fg(Color::DarkGray))
-        .title(Line::from(Span::styled(format!(" {} ", cpu.label), Style::new().fg(color).bold())))
+        .title(Line::from(Span::styled(format!(" {} ", cell.label), Style::new().fg(color).bold())))
         .title(
             Line::from(vec![
                 Span::styled(format!("{:>3.0}%", s.util), load_style(s.util)),
@@ -181,19 +211,18 @@ fn draw_core_cell(f: &mut Frame, area: Rect, app: &App, i: usize) {
         );
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let data = app.cores[i].tail(inner.width as usize, PCT_SCALE);
+    let data = cell.series.tail(inner.width as usize, PCT_SCALE);
     f.render_widget(Sparkline::default().data(&data).max((100.0 * PCT_SCALE) as u64).style(Style::new().fg(color)), inner);
 }
 
-fn draw_core_line(f: &mut Frame, area: Rect, app: &App, i: usize) {
-    let cpu = &app.topo.cpus[i];
-    let s = app.last.cores.get(i).copied().unwrap_or_default();
-    let color = kind_color(cpu.kind);
+fn draw_line(f: &mut Frame, area: Rect, cell: &GraphCell) {
+    let s = cell.sample;
+    let color = kind_color(cell.kind);
     let area = Rect { height: 1, ..area };
     let [label, graph, value] =
         Layout::horizontal([Constraint::Length(5), Constraint::Min(1), Constraint::Length(14)]).areas(area);
-    f.render_widget(Paragraph::new(Span::styled(format!(" {:<3}", cpu.label), Style::new().fg(color).bold())), label);
-    let data = app.cores[i].tail(graph.width as usize, PCT_SCALE);
+    f.render_widget(Paragraph::new(Span::styled(format!(" {:<3}", cell.label), Style::new().fg(color).bold())), label);
+    let data = cell.series.tail(graph.width as usize, PCT_SCALE);
     f.render_widget(Sparkline::default().data(&data).max((100.0 * PCT_SCALE) as u64).style(Style::new().fg(color)), graph);
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -312,6 +341,15 @@ fn draw_temps(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Line::from(spans)).wrap(Wrap { trim: true }).block(block), area);
 }
 
+fn kind_name(kind: CoreKind) -> &'static str {
+    match kind {
+        CoreKind::Performance => "P cores",
+        CoreKind::Efficient => "E cores",
+        CoreKind::LowPowerEfficient => "LP cores",
+        CoreKind::Uniform => "All cores",
+    }
+}
+
 fn kind_color(kind: CoreKind) -> Color {
     match kind {
         CoreKind::Performance | CoreKind::Uniform => Color::Green,
@@ -341,5 +379,69 @@ fn ghz(mhz: f64) -> String {
         "  -  ".into()
     } else {
         format!("{:.2} GHz", mhz / 1000.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::Snapshot;
+    use crate::topology::{LogicalCpu, Topology};
+    use ratatui::backend::TestBackend;
+
+    fn app(view: CpuView) -> App {
+        let cpu = |number, kind, label: &str| LogicalCpu { group: 0, number, kind, label: label.into() };
+        let topo = Topology {
+            cpu_name: "Test CPU".into(),
+            cpus: vec![
+                cpu(0, CoreKind::Performance, "P0"),
+                cpu(1, CoreKind::Performance, "P1"),
+                cpu(2, CoreKind::Efficient, "E0"),
+                cpu(3, CoreKind::Efficient, "E1"),
+            ],
+        };
+        let mut app = App::new(topo, 1000);
+        app.view = view;
+        let core = |util| CoreSample { util, mhz: 2000.0 };
+        app.push(Snapshot { cores: vec![core(80.0), core(60.0), core(10.0), core(20.0)], ..Snapshot::default() });
+        app
+    }
+
+    fn render(app: &App, w: u16, h: u16) -> String {
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer();
+        (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|p| buf[p].symbol()).collect()
+    }
+
+    #[test]
+    fn by_kind_view_replaces_core_graphs_with_one_graph_per_kind() {
+        let frame = render(&app(CpuView::ByKind), 120, 40);
+        assert!(frame.contains("P cores ×2") && frame.contains("70%"), "{frame}");
+        assert!(frame.contains("E cores ×2") && frame.contains("15%"), "{frame}");
+        assert!(!frame.contains(" P0 ") && !frame.contains(" E1 "), "{frame}");
+    }
+
+    #[test]
+    fn by_kind_view_keeps_p_left_of_e_even_when_narrow() {
+        let frame = render(&app(CpuView::ByKind), 44, 40);
+        let row = frame.chars().collect::<Vec<_>>().chunks(44).map(|r| r.iter().collect::<String>()).find(|r| r.contains("P cores"));
+        let row = row.expect("P graph is drawn");
+        assert!(row.find("P cores") < row.find("E cores") && row.contains("E cores"), "{frame}");
+    }
+
+    #[test]
+    fn per_core_view_is_the_default_and_shows_every_core() {
+        let frame = render(&App { view: CpuView::default(), ..app(CpuView::ByKind) }, 120, 40);
+        assert!(frame.contains(" P0 ") && frame.contains(" E1 "), "{frame}");
+        assert!(!frame.contains("P cores"), "{frame}");
+    }
+
+    #[test]
+    fn by_kind_view_survives_small_terminals() {
+        let app = app(CpuView::ByKind);
+        for (w, h) in [(120, 8), (40, 40), (40, 8), (40, 5), (20, 4), (10, 3), (10, 1)] {
+            render(&app, w, h);
+        }
     }
 }

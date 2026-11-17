@@ -35,7 +35,7 @@ Options:
   -h, --help           show this help
   -V, --version        show version
 
-Keys: q / Esc quit, + / - change the interval";
+Keys: q / Esc quit, + / - change the interval, v per-core / P·E combined graphs";
 
 struct Args {
     interval_ms: u64,
@@ -162,6 +162,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, mut sampler: Sampler, mut app: A
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                    KeyCode::Char('v') | KeyCode::Char('V') => app.toggle_view(),
                     KeyCode::Char('+') | KeyCode::Char('=') => {
                         app.interval_ms = (app.interval_ms + INTERVAL_STEP_MS).min(MAX_INTERVAL_MS);
                     }

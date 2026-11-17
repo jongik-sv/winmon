@@ -1,6 +1,7 @@
 //! CPU topology: which logical processors are P-cores / E-cores, and the CPU's marketing name.
 
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
 use windows_sys::Win32::System::SystemInformation::{
@@ -80,6 +81,18 @@ impl Topology {
 
     pub fn count(&self, kind: CoreKind) -> usize {
         self.cpus.iter().filter(|c| c.kind == kind).count()
+    }
+
+    /// Contiguous runs of cores of the same kind (`cpus` is sorted by kind).
+    pub fn kind_groups(&self) -> Vec<Range<usize>> {
+        let mut groups: Vec<Range<usize>> = Vec::new();
+        for (i, cpu) in self.cpus.iter().enumerate() {
+            match groups.last_mut() {
+                Some(g) if self.cpus[g.start].kind == cpu.kind => g.end = i + 1,
+                _ => groups.push(i..i + 1),
+            }
+        }
+        groups
     }
 
     /// Index into `cpus` for the PDH instance name `group,number`.
