@@ -9,6 +9,7 @@ mod metrics;
 mod pdh;
 mod topology;
 mod ui;
+mod window;
 
 use std::time::{Duration, Instant};
 
@@ -26,10 +27,11 @@ const INTERVAL_STEP_MS: u64 = 250;
 const USAGE: &str = "\
 winmon — performance monitor for Windows (per-core CPU, power, GPU/NPU, memory, temperature)
 
-Usage: winmon [-i <ms>] [--once [<cols>x<rows>]]
+Usage: winmon [-i <ms>] [-t] [--once [<cols>x<rows>]]
 
 Options:
   -i, --interval <ms>  sampling interval in milliseconds (default 1000, min 250)
+  -t, --topmost        keep the terminal window above other windows while running
       --once [WxH]     sample for a few intervals, print one frame as plain text and exit
                        (default size 120x40)
   -h, --help           show this help
@@ -41,6 +43,8 @@ struct Args {
     interval_ms: u64,
     /// `--once`: render a single frame of this size to stdout.
     once: Option<(u16, u16)>,
+    /// `--topmost`: keep the terminal window on top while running.
+    topmost: bool,
 }
 
 fn main() {
@@ -68,6 +72,8 @@ fn main() {
         return;
     }
 
+    // Dropped after `ratatui::restore()`, which puts the window back to normal on exit.
+    let _topmost = args.topmost.then(window::TopMost::enable).flatten();
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, sampler, App::new(topo, interval_ms));
     ratatui::restore();
@@ -81,6 +87,7 @@ fn main() {
 fn parse_args() -> Result<Option<Args>, String> {
     let mut interval = DEFAULT_INTERVAL_MS;
     let mut once = None;
+    let mut topmost = false;
     let mut args = std::env::args().skip(1).peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -96,6 +103,7 @@ fn parse_args() -> Result<Option<Args>, String> {
                 let v = args.next().ok_or("--interval needs a value")?;
                 interval = v.parse().map_err(|_| format!("invalid interval: {v}"))?;
             }
+            "-t" | "--topmost" => topmost = true,
             "--once" => {
                 let size = match args.peek() {
                     Some(v) if !v.starts_with('-') => {
@@ -111,7 +119,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             other => return Err(format!("unknown argument: {other}")),
         }
     }
-    Ok(Some(Args { interval_ms: interval.clamp(MIN_INTERVAL_MS, MAX_INTERVAL_MS), once }))
+    Ok(Some(Args { interval_ms: interval.clamp(MIN_INTERVAL_MS, MAX_INTERVAL_MS), once, topmost }))
 }
 
 /// Samples a few times so the graphs have some history, then prints one frame without colours.

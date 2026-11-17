@@ -9,9 +9,11 @@ license = "MIT"
 ratatui = "0.29"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_System_Console",
     "Win32_System_Performance",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [profile.release]

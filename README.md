@@ -51,6 +51,7 @@ Windows용 성능 모니터. [macmon](https://github.com/vladkens/macmon) 에서
 ```
 winmon                 # 1초 간격
 winmon -i 500          # 0.5초 간격 (최소 250ms)
+winmon -t              # 실행하는 동안 터미널 창을 항상 위에 표시 (끝내면 원래대로)
 winmon --once 120x40   # 한 화면을 텍스트로 출력하고 끝낸다
 ```
 
@@ -80,6 +81,7 @@ Visual Studio Build Tools 없이 빌드하도록 GNU 툴체인(`x86_64-pc-window
 1. Rust: `rustup-init.exe --default-host x86_64-pc-windows-gnu`
 2. `dlltool.exe`(MinGW-w64 binutils)를 PATH 에 둔다. 예: MSYS2 의 `ucrt64\bin`
 3. `cargo build --release` → `target\x86_64-pc-windows-gnu\release\winmon.exe`
+4. PATH 에 설치: `cargo install --path . --locked` (`Cargo.lock` 의 의존성 버전을 그대로 쓴다)
 
 결과물은 단일 exe(약 600KB)이고, 다른 PC 에서 실행할 때는 Rust·MinGW 가 필요 없다.
 
